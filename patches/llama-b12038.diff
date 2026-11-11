@@ -1,0 +1,450 @@
+diff --git a/ggml/src/ggml-rpc/ggml-rpc.cpp b/ggml/src/ggml-rpc/ggml-rpc.cpp
+index 5cf9339..013e726 100644
+--- a/ggml/src/ggml-rpc/ggml-rpc.cpp
++++ b/ggml/src/ggml-rpc/ggml-rpc.cpp
+@@ -1397,6 +1397,9 @@ public:
+         : backends(std::move(all_backends)), cache_dir(cache_dir) {
+         stored_graphs.resize(backends.size());
+         comm_states.resize(backends.size());
++        pending_bufs.resize(backends.size());
++        pending_ctxs.resize(backends.size());
++        graph_inflight.assign(backends.size(), false);
+     }
+     ~rpc_server();
+ 
+@@ -1430,6 +1433,8 @@ public:
+ 
+ private:
+     void sync_all_backends();
++    // (GGML_RPC_LAZY_SYNC): wait for the device and release graph memory kept alive for in-flight work
++    void sync_device(uint32_t device);
+     bool get_cached_file(uint64_t hash, std::vector<uint8_t> & data);
+     ggml_tensor * deserialize_tensor(struct ggml_context * ctx, const rpc_tensor * tensor);
+     ggml_tensor * create_node(uint64_t id,
+@@ -1441,6 +1446,7 @@ private:
+     // pairwise allreduce over a direct connection to the peer server
+     struct comm_state {
+         socket_ptr              peer;
++        socket_ptr              peer2;   // second direct line (GGML_RPC_PEER2_HOST); a partial is split across peer and peer2
+         uint32_t                rank = 0;
+         uint32_t                world = 0;
+         ggml_backend_buffer_ptr scratch;
+@@ -1455,8 +1461,19 @@ private:
+     // computed graphs cached per backend, keyed by uid
+     std::vector<std::unordered_map<uint64_t, stored_graph>> stored_graphs;
+     std::vector<comm_state> comm_states;
++    // memory of graphs that may still be executing on the device; freed at the next sync of that device
++    std::vector<std::vector<std::vector<uint8_t>>> pending_bufs;
++    std::vector<std::vector<ggml_context_ptr>>     pending_ctxs;
++    std::vector<bool>                              graph_inflight;
+ };
+ 
++// skip the extra synchronizations added for the Vulkan crash, and instead keep the graph memory
++// alive until the device is synchronized (set GGML_RPC_LAZY_SYNC=1 to enable)
++static bool rpc_lazy_sync() {
++    static const bool v = std::getenv("GGML_RPC_LAZY_SYNC") != nullptr;
++    return v;
++}
++
+ void rpc_server::hello(rpc_msg_hello_rsp & response) {
+     response.major = RPC_PROTO_MAJOR_VERSION;
+     response.minor = RPC_PROTO_MINOR_VERSION;
+@@ -2143,6 +2160,12 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
+     LOG_DBG("[%s] device: %u, uid: %" PRIu64 ", n_nodes: %u, n_tensors: %u\n", __func__, device, uid, n_nodes, n_tensors);
+ 
+     // graphs with uid == 0 are not cached, see GRAPH_CACHE_MAX for the eviction policy
++    if (!rpc_lazy_sync()) {
++        ggml_backend_synchronize(backends[device]);
++    } else if (graph_inflight[device] || (uid != 0 && stored_graphs[device].size() >= GRAPH_CACHE_MAX)) {
++        // a previous graph may still be running: wait before its memory can be reused or evicted
++        sync_device(device);
++    }
+     if (uid != 0 && stored_graphs[device].size() >= GRAPH_CACHE_MAX) {
+         LOG_DBG("[%s] clearing graph cache for device %u (%zu entries)\n",
+                 __func__, device, stored_graphs[device].size());
+@@ -2197,6 +2220,12 @@ bool rpc_server::graph_compute(const std::vector<uint8_t> & input) {
+     ggml_status status = ggml_backend_graph_compute_async(backends[device], graph);
+     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
+     sg.graph = graph;
++    if (rpc_lazy_sync()) {
++        graph_inflight[device] = true;
++        if (uid == 0) {
++            pending_bufs[device].push_back(std::move(sg_tmp.buffer));
++        }
++    }
+     LOG_DBG3("[%s] device: %u, graph build: %.3f ms\n", __func__, device, deserialize_ms.count());
+     return true;
+ }
+@@ -2215,16 +2244,26 @@ bool rpc_server::graph_recompute(const rpc_msg_graph_recompute_req & request) {
+     LOG_DBG("[%s] device: %u, uid: %" PRIu64 "\n", __func__, device, request.uid);
+     ggml_status status = ggml_backend_graph_compute_async(backends[device], graph);
+     GGML_ASSERT(status == GGML_STATUS_SUCCESS && "Unsuccessful graph computations are not supported with RPC");
++    if (rpc_lazy_sync()) {
++        graph_inflight[device] = true;
++    }
+     return true;
+ }
+ 
+ // graph compute is asynchronous; commands that read or write buffer data synchronize first
+ void rpc_server::sync_all_backends() {
+-    for (ggml_backend_t backend : backends) {
+-        ggml_backend_synchronize(backend);
++    for (uint32_t i = 0; i < backends.size(); i++) {
++        sync_device(i);
+     }
+ }
+ 
++void rpc_server::sync_device(uint32_t device) {
++    ggml_backend_synchronize(backends[device]);
++    pending_bufs[device].clear();
++    pending_ctxs[device].clear();
++    graph_inflight[device] = false;
++}
++
+ // The comm link between two servers uses the same caps negotiation as the client HELLO,
+ // so it gets the same transport upgrades (e.g. RDMA).
+ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_init_rsp & response) {
+@@ -2280,6 +2319,23 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
+         }
+         state.peer->update_caps(remote_caps);
+     }
++    // optional second line. rank 0 listens on port+1, rank 1 connects to GGML_RPC_PEER2_HOST:port+1.
++    // All-or-nothing: if it is requested and cannot be built, the communicator fails (otherwise the two ranks would disagree).
++    if (const char * peer2_host = getenv("GGML_RPC_PEER2_HOST")) {
++        const int port2 = (int) request.port + 1;
++        if (request.rank == 0) {
++            socket_ptr srv2 = socket_t::create_server("0.0.0.0", port2);
++            if (srv2 == nullptr) { LOG_ERROR("[%s] failed to listen on comm port %d\n", __func__, port2); state.peer = nullptr; return true; }
++            state.peer2 = srv2->accept();
++        } else {
++            for (int i = 0; i < 100 && state.peer2 == nullptr; i++) {
++                state.peer2 = socket_t::connect(peer2_host, port2);
++                if (state.peer2 == nullptr) { std::this_thread::sleep_for(std::chrono::milliseconds(50)); }
++            }
++        }
++        if (state.peer2 == nullptr) { LOG_ERROR("[%s] failed to build the second line (%s:%d)\n", __func__, peer2_host, port2); state.peer = nullptr; return true; }
++        LOG_INFO("[%s] device %u second line up (%s:%d)\n", __func__, request.device, peer2_host, port2);
++    }
+     state.rank  = request.rank;
+     state.world = request.world;
+     LOG_INFO("[%s] device %u joined pairwise comm as rank %u\n", __func__, request.device, request.rank);
+@@ -2287,7 +2343,13 @@ bool rpc_server::comm_init(const rpc_msg_comm_init_req & request, rpc_msg_comm_i
+     return true;
+ }
+ 
++// GGML_RPC_PROF2 prints the average split of one all-reduce every 2000 calls
++static bool rpc_prof2() { static const bool v = getenv("GGML_RPC_PROF2") != nullptr; return v; }
++static double rpc_now_us() { return std::chrono::duration<double, std::micro>(std::chrono::steady_clock::now().time_since_epoch()).count(); }
+ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
++    const bool prof = rpc_prof2();
++    const double tp0 = prof ? rpc_now_us() : 0.0;
++    double tp1 = 0, tp2 = 0, tp3 = 0;
+     if (request.device >= backends.size()) {
+         return false;
+     }
+@@ -2319,7 +2381,9 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
+     }
+     // reduce large partials in bf16 to halve the wire bytes; small (decode-sized) ones
+     // stay f32 since the extra casts and sync cost more than the bytes saved
+-    const bool   wire_bf16  = t_dst->type == GGML_TYPE_F32 && ne >= 32768;
++    // W-USB4 (GGML_RPC_BF16_MIN): smallest partial (elements) sent as bf16; default 32768 = upstream
++    static const int64_t bf16_min = [] { const char * e = getenv("GGML_RPC_BF16_MIN"); return e ? (int64_t) atoll(e) : (int64_t) 32768; }();
++    const bool   wire_bf16  = t_dst->type == GGML_TYPE_F32 && ne >= bf16_min;
+     const size_t wire_bytes = wire_bf16 ? (size_t) ne*2 : nbytes;
+     const size_t need       = wire_bf16 ? 2*nbytes : nbytes;
+     if (state.scratch_size < need) {
+@@ -2356,7 +2420,12 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
+     };
+ 
+     // wait for the pending subgraph that produced this partial
+-    ggml_backend_synchronize(backend);
++    if (rpc_lazy_sync()) {
++        sync_device(request.device);   // also waits for the previous reduce and frees its graph
++    } else {
++        ggml_backend_synchronize(backend);
++    }
++    if (prof) tp1 = rpc_now_us();
+ 
+     ggml_tensor * t_wire_send = nullptr;
+     ggml_tensor * t_wire_recv = nullptr;
+@@ -2370,8 +2439,27 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
+         ggml_backend_tensor_get(t_dst, state.send_buf.data(), 0, wire_bytes);
+     }
+ 
++    if (prof) tp2 = rpc_now_us();
+     // rank 0 sends first, rank 1 receives first, so large payloads cannot deadlock
+-    if (state.rank == 0) {
++    // with a second line, the payload is split in two halves that travel on both lines at the same time
++    // (GGML_RPC_SPLIT_MIN/MAX bound the payload size that is split; above MAX one line is used, as upstream)
++    static const size_t split_min = [] { const char * e = getenv("GGML_RPC_SPLIT_MIN"); return e ? (size_t) atoll(e) : (size_t) 8192; }();
++    static const size_t split_max = [] { const char * e = getenv("GGML_RPC_SPLIT_MAX"); return e ? (size_t) atoll(e) : (size_t) 65536; }();
++    if (state.peer2 != nullptr && wire_bytes >= split_min && wire_bytes <= split_max) {
++        const size_t h1 = wire_bytes / 2, h2 = wire_bytes - h1;
++        uint8_t * sb = state.send_buf.data(); uint8_t * rb = state.recv_buf.data();
++        if (state.rank == 0) {
++            if (!state.peer->send_data(sb, h1) || !state.peer2->send_data(sb + h1, h2) || !state.peer->flush() || !state.peer2->flush() ||
++                !state.peer->recv_data(rb, h1) || !state.peer2->recv_data(rb + h1, h2)) {
++                return false;
++            }
++        } else {
++            if (!state.peer->recv_data(rb, h1) || !state.peer2->recv_data(rb + h1, h2) ||
++                !state.peer->send_data(sb, h1) || !state.peer2->send_data(sb + h1, h2) || !state.peer->flush() || !state.peer2->flush()) {
++                return false;
++            }
++        }
++    } else if (state.rank == 0) {
+         if (!state.peer->send_data(state.send_buf.data(), wire_bytes) || !state.peer->flush() ||
+             !state.peer->recv_data(state.recv_buf.data(), wire_bytes)) {
+             return false;
+@@ -2383,6 +2471,7 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
+         }
+     }
+ 
++    if (prof) tp3 = rpc_now_us();
+     ggml_tensor * t_peer = new_scratch_tensor(t_dst->type, wire_bf16 ? (size_t) ne*4 : 0);
+     ggml_tensor * t_cast = nullptr;
+     if (wire_bf16) {
+@@ -2405,6 +2494,22 @@ bool rpc_server::comm_allreduce(const rpc_msg_comm_allreduce_req & request) {
+     } else {
+         compute_nodes(t_red, nullptr);
+     }
++    if (rpc_lazy_sync()) {
++        // do not wait for the add: keep its graph alive until the next sync of this device
++        pending_ctxs[request.device].push_back(std::move(ctx_ptr));
++    } else {
++        ggml_backend_synchronize(backend);
++    }
++    if (prof) {
++        static double acc[4]; static uint64_t ncall;
++        const double tp4 = rpc_now_us();
++        acc[0] += tp1 - tp0; acc[1] += tp2 - tp1; acc[2] += tp3 - tp2; acc[3] += tp4 - tp3;
++        if (++ncall % 2000 == 0) {
++            fprintf(stderr, "PROF2 n=%llu gpu_wait=%.1f readback=%.1f exchange=%.1f set_add=%.1f us (bytes=%zu)\n", (unsigned long long) ncall,
++                    acc[0]/2000, acc[1]/2000, acc[2]/2000, acc[3]/2000, wire_bytes);
++            acc[0] = acc[1] = acc[2] = acc[3] = 0;
++        }
++    }
+     return true;
+ }
+ 
+diff --git a/ggml/src/ggml-rpc/transport.cpp b/ggml/src/ggml-rpc/transport.cpp
+index d5670f3..19167ad 100644
+--- a/ggml/src/ggml-rpc/transport.cpp
++++ b/ggml/src/ggml-rpc/transport.cpp
+@@ -388,7 +388,8 @@ bool socket_t::impl::rdma_activate(uint32_t remote_qpn, uint32_t remote_psn, con
+     {
+         struct ibv_qp_attr a = {};
+         a.qp_state     = IBV_QPS_RTS;
+-        a.timeout      = 14;
++        // ACK timeout = 4.096us * 2^timeout; upstream 14 (~67 ms). GGML_RDMA_TIMEOUT overrides
++        { const char * e = std::getenv("GGML_RDMA_TIMEOUT"); a.timeout = e ? (uint8_t) atoi(e) : 14; }
+         a.retry_cnt    = 7;
+         a.rnr_retry    = 7;
+         a.sq_psn       = rdma_local.psn;
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp b/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp
+index 4e60df4..d1812ad 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-buffers.cpp
+@@ -1,4 +1,38 @@
+ #include "ggml-vulkan-common.h"
++bool ggml_vk_host_barrier_enabled();
++bool ggml_vk_spin_wait_enabled();
++#if defined(__SSE4_1__)
++#include <smmintrin.h>
++#endif
++
++// read uncached (write-combined) UMA memory with streaming loads (GGML_VK_UMA_READ_STREAM=1)
++static void ggml_vk_uma_read(void * dst, const void * src, size_t n, bool uncached) {
++#if defined(__SSE4_1__)
++    static const bool stream = getenv("GGML_VK_UMA_READ_STREAM") != nullptr;
++    if (stream && uncached && n >= 64 && ((uintptr_t) src % 16) == ((uintptr_t) dst % 16)) {
++        uint8_t * d = (uint8_t *) dst;
++        const uint8_t * s = (const uint8_t *) src;
++        const size_t head = (16 - ((uintptr_t) s % 16)) % 16;
++        memcpy(d, s, head); d += head; s += head; n -= head;
++        size_t i = 0;
++        for (; i + 64 <= n; i += 64) {
++            __m128i a = _mm_stream_load_si128((__m128i *) (s + i));
++            __m128i b = _mm_stream_load_si128((__m128i *) (s + i + 16));
++            __m128i c = _mm_stream_load_si128((__m128i *) (s + i + 32));
++            __m128i e = _mm_stream_load_si128((__m128i *) (s + i + 48));
++            _mm_store_si128((__m128i *) (d + i), a);
++            _mm_store_si128((__m128i *) (d + i + 16), b);
++            _mm_store_si128((__m128i *) (d + i + 32), c);
++            _mm_store_si128((__m128i *) (d + i + 48), e);
++        }
++        memcpy(d + i, s + i, n - i);
++        return;
++    }
++#else
++    (void) uncached;
++#endif
++    memcpy(dst, src, n);
++}
+ 
+ #include <cstdint>
+ #include <cstdlib>
+@@ -702,13 +736,24 @@ void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t sp
+     // through PCIe is sufficient fast reading back data from PCIe is slower than going through
+     // the HW device to host copy path.
+     // AMD UMA: uncached host-visible memory is write-combined, CPU reads are slow
++    // GGML_VK_UMA_DIRECT_READ_MAX=<bytes> reads small uncached UMA tensors directly (streaming loads)
++    // instead of a GPU copy + fence; the 20 KB all-reduce partials spent ~40 us in the copy path
++    static const size_t direct_max = [] { const char * e = getenv("GGML_VK_UMA_DIRECT_READ_MAX"); return e ? (size_t) atoll(e) : (size_t) 0; }();
+     const bool slow_host_read = src->device->vendor_id == VK_VENDOR_ID_AMD &&
+-                                !(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
++                                !(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached) &&
++                                !(direct_max && width * height <= direct_max);
+     if(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostVisible && src->device->uma && !slow_host_read) {
+         GGML_ASSERT(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCoherent);
+ 
+         std::lock_guard<std::recursive_mutex> guard(src->device->mutex);
++        // experiment (GGML_VK_UMA_READ_NO_BARRIER=1): skip the barrier-only submit + wait.
++        // Only valid when the caller has already synchronized the device. Not for production.
++        static const bool no_barrier = getenv("GGML_VK_UMA_READ_NO_BARRIER") != nullptr;
++        // (GGML_VK_HOST_BARRIER): the last graph already ended with a device->host barrier and was waited for
++        const bool ready = ggml_vk_host_barrier_enabled() && src->device->host_visible_ready;
++        if (!no_barrier && !ready) {
+         vk_context subctx = ggml_vk_create_temporary_context(src->device->compute_queue->cmd_pool);
++        subctx->host_barrier = true;
+         ggml_vk_ctx_begin(src->device, subctx);
+         subctx->s->buffer->buf.pipelineBarrier(
+             vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
+@@ -719,16 +764,24 @@ void ggml_vk_buffer_read_2d(vk_buffer& src, size_t offset, void * dst, size_t sp
+             {}, {});
+         ggml_vk_ctx_end(subctx);
+         ggml_vk_submit(subctx, src->device->fence);
+-        VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX),
+-                 "vk_buffer_read_2d uma waitForFences", src->device);
++        if (ggml_vk_spin_wait_enabled()) {
++            while (src->device->device.getFenceStatus(src->device->fence) == vk::Result::eNotReady) {
++            }
++        } else {
++            VK_CHECK(src->device->device.waitForFences({ src->device->fence }, true, UINT64_MAX),
++                     "vk_buffer_read_2d uma waitForFences", src->device);
++        }
+         src->device->device.resetFences({ src->device->fence });
+         ggml_vk_queue_command_pools_cleanup(src->device);
++        src->device->host_visible_ready = true;
++        }
+ 
++        const bool uncached = !(src->memory_property_flags & vk::MemoryPropertyFlagBits::eHostCached);
+         if (width == spitch && width == dpitch) {
+-            memcpy(dst, (const uint8_t *) src->ptr + offset, width * height);
++            ggml_vk_uma_read(dst, (const uint8_t *) src->ptr + offset, width * height, uncached);
+         } else {
+             for (size_t i = 0; i < height; i++) {
+-                memcpy((uint8_t *) dst + i * dpitch, (const uint8_t *) src->ptr + offset + i * spitch, width);
++                ggml_vk_uma_read((uint8_t *) dst + i * dpitch, (const uint8_t *) src->ptr + offset + i * spitch, width, uncached);
+             }
+         }
+     } else {
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan-types.h b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+index a150555..c574e11 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan-types.h
++++ b/ggml/src/ggml-vulkan/ggml-vulkan-types.h
+@@ -659,6 +659,10 @@ static constexpr std::array<ggml_type, 9> lightning_indexer_k_types = {
+ class vk_memory_logger;
+ 
+ struct vk_device_struct {
++    // (GGML_VK_HOST_BARRIER): the last submitted command buffer ended with a device->host memory barrier,
++    // and the host has waited for it, so host-visible memory written by the device can be read without a new submit
++    bool last_submit_host_barrier = false;
++    bool host_visible_ready = false;
+     std::recursive_mutex mutex;
+     std::mutex queue_submit_mutex;
+ 
+@@ -1128,6 +1132,8 @@ struct vk_context_struct {
+     std::vector<std::string> debug_labels;
+ 
+     vk_command_pool * p {};
++
++    bool host_barrier = false;   // this context ends with a device->host memory barrier
+ };
+ 
+ typedef std::shared_ptr<vk_context_struct> vk_context;
+diff --git a/ggml/src/ggml-vulkan/ggml-vulkan.cpp b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+index c094368..e563997 100644
+--- a/ggml/src/ggml-vulkan/ggml-vulkan.cpp
++++ b/ggml/src/ggml-vulkan/ggml-vulkan.cpp
+@@ -336,10 +336,21 @@ static VkDeviceSize ggml_vk_get_max_buffer_range(const ggml_backend_vk_context *
+     return range;
+ }
+ 
++// environment switches for the cluster experiments (dev machines only)
++bool ggml_vk_host_barrier_enabled() {
++    static const bool v = getenv("GGML_VK_HOST_BARRIER") != nullptr;
++    return v;
++}
++bool ggml_vk_spin_wait_enabled() {
++    static const bool v = getenv("GGML_VK_SPIN_WAIT") != nullptr;
++    return v;
++}
++
+ void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
+     // Use waitForFences while most of the graph executes. Hopefully the CPU can sleep
+     // during this wait.
+-    if (ctx->almost_ready_fence_pending) {
++    // (GGML_VK_SPIN_WAIT): spin for the whole wait instead (small graphs, latency matters)
++    if (ctx->almost_ready_fence_pending && !ggml_vk_spin_wait_enabled()) {
+         VK_CHECK(ctx->device->device.waitForFences({ ctx->almost_ready_fence }, true, UINT64_MAX), "almost_ready_fence", ctx->device);
+         ctx->device->device.resetFences({ ctx->almost_ready_fence });
+         ctx->almost_ready_fence_pending = false;
+@@ -376,6 +387,14 @@ void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
+         }
+     }
+     ctx->device->device.resetFences({ ctx->fence });
++    if (ctx->almost_ready_fence_pending) {
++        // spin mode: the almost-ready fence was submitted earlier on the same queue, so it is signaled by now
++        while (ctx->device->device.getFenceStatus(ctx->almost_ready_fence) == vk::Result::eNotReady) {
++            YIELD();
++        }
++        ctx->device->device.resetFences({ ctx->almost_ready_fence });
++        ctx->almost_ready_fence_pending = false;
++    }
+ }
+ 
+ static bool ggml_vk_strip_decode_vector(const uint32_t * code, size_t word_count, std::vector<uint32_t> & out) {
+@@ -906,6 +925,13 @@ void ggml_vk_submit(vk_context& ctx, vk::Fence fence) {
+         }
+         return;
+     }
++    // remember whether this submission ends with a device->host barrier
++    if (ctx->p && ctx->p->q && ctx->p->q->handle) {
++        if (auto dev = ctx->p->q->handle->device.lock()) {
++            dev->host_visible_ready       = false;
++            dev->last_submit_host_barrier = ctx->host_barrier;
++        }
++    }
+     VK_LOG_DEBUG("ggml_vk_submit(" << ctx << ", " << fence << ")");
+ 
+     std::vector<std::vector<uint64_t>> tl_wait_vals;
+@@ -12921,6 +12947,18 @@ bool ggml_vk_build_graph(ggml_backend_vk_context * ctx, ggml_cgraph * cgraph, in
+ #endif
+ 
+     if (submit || last_node) {
++        // (GGML_VK_HOST_BARRIER): end the graph with a device->host barrier, so that after the fence
++        // the host may read the results without another submit (Vulkan memory model: barrier + fence wait)
++        if (last_node && ggml_vk_host_barrier_enabled() && ctx->device->uma && compute_ctx->s) {
++            compute_ctx->s->buffer->buf.pipelineBarrier(
++                vk::PipelineStageFlagBits::eComputeShader | vk::PipelineStageFlagBits::eTransfer,
++                vk::PipelineStageFlagBits::eHost,
++                {},
++                { { vk::AccessFlagBits::eShaderWrite | vk::AccessFlagBits::eTransferWrite,
++                    vk::AccessFlagBits::eHostRead } },
++                {}, {});
++            compute_ctx->host_barrier = true;
++        }
+         ggml_vk_ctx_end(compute_ctx);
+ 
+         // TODO probably it'd be better to pass a exit_node flag to ggml_vk_compute_forward
+@@ -13592,6 +13630,9 @@ void ggml_vk_synchronize(ggml_backend_vk_context * ctx) {
+         }
+         if (!ctx->device->serialize_submissions) {
+             ggml_vk_wait_for_fence(ctx);
++            if (ctx->device->last_submit_host_barrier) {
++                ctx->device->host_visible_ready = true;
++            }
+         }
+         ctx->submit_pending = false;
+         if (cmd_buf) {

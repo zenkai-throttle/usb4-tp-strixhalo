@@ -1,0 +1,32 @@
+[2026-11-04 11:42:03] == æº–å‚™ï¼ˆrouter ã‚’æ­¢ã‚ã‚‹ãƒ»ãƒªãƒ³ã‚¯ï¼‰
+unit1 1-2 rx=10.0 Gb/sx2
+unit1 2-2 rx=10.0 Gb/sx2
+unit2 0-2 rx=10.0 Gb/sx2
+unit2 1-2 rx=10.0 Gb/sx2
+rtt min/avg/max/mdev = 0.425/0.961/1.154/0.163 ms
+[2026-11-04 11:42:13] == â‘  1å°ï¼ˆå° Aãƒ»RPC ãªã—ï¼‰
+single | qwen35 27B Q4_K - Medium       |  16.34 GiB |    27.32 B | Vulkan     |  99 |   1 |           pp512 |        407.43 Â± 0.46 |
+single | qwen35 27B Q4_K - Medium       |  16.34 GiB |    27.32 B | Vulkan     |  99 |   1 |           tg128 |         12.37 Â± 0.08 |
+single ja gen 12.29 tok/s n 160 draft None acc None
+single en gen 12.14 tok/s n 160 draft None acc None
+[2026-11-04 11:43:15] == â‘¡ 2å°ãƒ»å±¤ã§åˆ†ã‘ã‚‹ï¼ˆå° A ã® GPUï¼‹å° B ã® rpc-serverï¼‰
+layer | qwen35 27B Q4_K - Medium       |  16.34 GiB |    27.32 B | Vulkan,RPC |  99 |   1 |           pp512 |        375.63 Â± 0.38 |
+layer | qwen35 27B Q4_K - Medium       |  16.34 GiB |    27.32 B | Vulkan,RPC |  99 |   1 |           tg128 |         11.31 Â± 0.04 |
+layer ja gen 11.22 tok/s n 160 draft None acc None
+layer en gen 11.24 tok/s n 160 draft None acc None
+[2026-11-04 11:44:50] == â‘¢ 2å°ãƒ»ãƒ†ãƒ³ã‚½ãƒ«ä¸¦åˆ—ï¼ˆä¸¡æ–¹ rpc-serverãƒ»-sm tensorï¼‰
+tensor ja gen 14.05 tok/s n 160 draft None acc None
+tensor en gen 14.09 tok/s n 160 draft None acc None
+[2026-11-04 11:45:46] == â‘£ 2å°ãƒ»ãƒ†ãƒ³ã‚½ãƒ«ä¸¦åˆ—ï¼‹å…ˆèª­ã¿ï¼ˆMTPï¼‰
+tensor_mtp ja gen 22.16 tok/s n 160 draft 136 acc 90
+tensor_mtp en gen 22.39 tok/s n 160 draft 136 acc 90
+[2026-11-04 11:46:30] == â‘¤ ç­”ãˆã®ä¸€è‡´ï¼ˆæ¸©åº¦0ãƒ»1å°ã¨æ¯”ã¹ã‚‹ï¼‰
+layer ja ˆê’v
+layer en ˆê’v
+tensor ja 230•¶š–Ú‚©‚ç•ª‚©‚ê‚éi‘S804•¶šj
+tensor en 119•¶š–Ú‚©‚ç•ª‚©‚ê‚éi‘S772•¶šj
+tensor_mtp ja 210•¶š–Ú‚©‚ç•ª‚©‚ê‚éi‘S804•¶šj
+tensor_mtp en 99•¶š–Ú‚©‚ç•ª‚©‚ê‚éi‘S772•¶šj
+[2026-11-04 11:46:30] çµ‚ã‚ã‚Š â†’ ./20261104-1142-usb4front-itr0-lazy
+active
+active

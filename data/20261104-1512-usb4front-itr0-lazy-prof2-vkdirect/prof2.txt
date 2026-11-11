@@ -1,0 +1,8 @@
+PROF2 n=34000 gpu_wait=355.2 readback=0.7 exchange=88.8 set_add=10.0 us (bytes=20480)
+PROF2 n=36000 gpu_wait=355.7 readback=0.7 exchange=89.2 set_add=9.8 us (bytes=20480)
+PROF2 n=38000 gpu_wait=355.1 readback=0.7 exchange=88.1 set_add=10.1 us (bytes=20480)
+PROF2 n=40000 gpu_wait=355.2 readback=0.7 exchange=89.6 set_add=10.1 us (bytes=20480)
+PROF2 n=34000 gpu_wait=357.0 readback=0.7 exchange=87.5 set_add=9.8 us (bytes=20480)
+PROF2 n=36000 gpu_wait=356.4 readback=0.7 exchange=86.4 set_add=9.8 us (bytes=20480)
+PROF2 n=38000 gpu_wait=356.8 readback=0.7 exchange=87.3 set_add=9.8 us (bytes=20480)
+PROF2 n=40000 gpu_wait=357.0 readback=0.7 exchange=86.3 set_add=9.9 us (bytes=20480)

@@ -1,0 +1,62 @@
+[2026-11-06 11:28:44] == 準備（router を止める・リンク）
+unit1 1-2 rx=10.0 Gb/sx2
+unit1 2-2 rx=10.0 Gb/sx2
+unit2 0-2 rx=10.0 Gb/sx2
+unit2 1-2 rx=10.0 Gb/sx2
+
+[2026-11-06 11:29:11] 線＝thunderbolt0  tb_itr val=0 / 0  EXTRA=GGML_RPC_LAZY_SYNC=1 GGML_VK_HOST_BARRIER=1 GGML_VK_UMA_DIRECT_READ_MAX=65536
+[2026-11-06 11:29:15] == 1台・先読みなし
+single ja gen 12.34 tok/s n 160 draft None acc None
+single en gen 12.29 tok/s n 160 draft None acc None
+[2026-11-06 11:29:51] == 1台・先読み 深さ 1
+single_mtp1 ja gen 19.32 tok/s n 160 draft 87 acc 71
+single_mtp1 en gen 19.51 tok/s n 160 draft 86 acc 73
+[2026-11-06 11:30:17] == 1台・先読み 深さ 2
+single_mtp2 ja gen 22.36 tok/s n 160 draft 136 acc 91
+single_mtp2 en gen 22.78 tok/s n 160 draft 130 acc 93
+[2026-11-06 11:30:42] == 1台・先読み 深さ 3
+single_mtp3 ja gen 22.44 tok/s n 160 draft 183 acc 97
+single_mtp3 en gen 26.13 tok/s n 160 draft 156 acc 107
+[2026-11-06 11:31:07] == 1台・先読み 深さ 4
+single_mtp4 ja gen 22.14 tok/s n 160 draft 219 acc 104
+single_mtp4 en gen 24.46 tok/s n 160 draft 192 acc 110
+[2026-11-06 11:31:33] == 2台・テンソル並列・先読みなし
+tp ja gen 15.0 tok/s n 160 draft None acc None
+tp en gen 14.9 tok/s n 160 draft None acc None
+[2026-11-06 11:32:24] == 2台・テンソル並列・先読み 深さ 1
+tp_mtp1 ja gen 21.24 tok/s n 160 draft 89 acc 70
+tp_mtp1 en gen 21.54 tok/s n 160 draft 86 acc 72
+[2026-11-06 11:33:09] == 2台・テンソル並列・先読み 深さ 2
+tp_mtp2 ja gen 23.4 tok/s n 160 draft 136 acc 90
+tp_mtp2 en gen 23.38 tok/s n 160 draft 136 acc 90
+[2026-11-06 11:33:53] == 2台・テンソル並列・先読み 深さ 3
+tp_mtp3 ja gen 23.06 tok/s n 160 draft 180 acc 99
+tp_mtp3 en gen 25.48 tok/s n 160 draft 160 acc 105
+[2026-11-06 11:34:36] == 2台・テンソル並列・先読み 深さ 4
+tp_mtp4 ja gen 19.19 tok/s n 160 draft 219 acc 104
+tp_mtp4 en gen 23.98 tok/s n 160 draft 199 acc 109
+[2026-11-06 11:35:21] == 集計（ステップ数は、下書きの総数÷深さで見積もる＝[前提からの計算]。全ステップで深さいっぱいに下書きする前提）
+label     lang  tok/s   n  draft acc  acc��  step��  A(��/�X�e�b�v)  1�X�e�b�v(ms)
+single    ja     12.34  160     -    -      -     160      1.00          81.0
+single    en     12.29  160     -    -      -     160      1.00          81.4
+single_mtp1ja     19.32  160    87   71   0.82    87.0      1.84          95.2
+single_mtp1en     19.51  160    86   73   0.85    86.0      1.86          95.3
+single_mtp2ja     22.36  160   136   91   0.67    68.0      2.35         105.2
+single_mtp2en     22.78  160   130   93   0.72    65.0      2.46         108.1
+single_mtp3ja     22.44  160   183   97   0.53    61.0      2.62         116.9
+single_mtp3en     26.13  160   156  107   0.69    52.0      3.08         117.8
+single_mtp4ja     22.14  160   219  104   0.47    54.8      2.92         132.0
+single_mtp4en     24.46  160   192  110   0.57    48.0      3.33         136.3
+tp        ja     15.00  160     -    -      -     160      1.00          66.7
+tp        en     14.90  160     -    -      -     160      1.00          67.1
+tp_mtp1   ja     21.24  160    89   70   0.79    89.0      1.80          84.7
+tp_mtp1   en     21.54  160    86   72   0.84    86.0      1.86          86.4
+tp_mtp2   ja     23.40  160   136   90   0.66    68.0      2.35         100.6
+tp_mtp2   en     23.38  160   136   90   0.66    68.0      2.35         100.6
+tp_mtp3   ja     23.06  160   180   99   0.55    60.0      2.67         115.6
+tp_mtp3   en     25.48  160   160  105   0.66    53.3      3.00         117.8
+tp_mtp4   ja     19.19  160   219  104   0.47    54.8      2.92         152.3
+tp_mtp4   en     23.98  160   199  109   0.55    49.8      3.22         134.1
+[2026-11-06 11:35:22] 終わり → 20261106-1128-w237a-depth-usb4front
+active
+active

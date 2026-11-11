@@ -1,0 +1,46 @@
+[2026-11-06 13:24:56] == 準備（router を止める・リンク）
+unit1 1-2 rx=10.0 Gb/sx2
+unit1 2-2 rx=10.0 Gb/sx2
+unit2 0-2 rx=10.0 Gb/sx2
+unit2 1-2 rx=10.0 Gb/sx2
+rtt min/avg/max/mdev = 0.565/1.051/1.324/0.183 ms
+[2026-11-06 13:25:12] 線＝thunderbolt0  tb_itr val=0 / 0  EXTRA=GGML_RPC_LAZY_SYNC=1 GGML_VK_HOST_BARRIER=1 GGML_VK_UMA_DIRECT_READ_MAX=65536
+rtt min/avg/max/mdev = 0.746/0.872/0.999/0.103 ms
+[2026-11-06 13:25:23] == 回 1：1本
+  one1 2本目の接続数: 0
+one1 ja gen 15.02 tok/s n 160 draft None acc None
+one1 en gen 15.0 tok/s n 160 draft None acc None
+[2026-11-06 13:26:12] == 回 1：2本に分ける
+  two1 2本目の接続数: 1
+two1 ja gen 15.49 tok/s n 160 draft None acc None
+two1 en gen 15.41 tok/s n 160 draft None acc None
+[comm_init] device 0 second line up (10.77.3.1:51053)
+[comm_init] device 0 second line up (10.77.3.1:51053)
+[2026-11-06 13:27:00] == 回 2：1本
+  one2 2本目の接続数: 0
+one2 ja gen 15.02 tok/s n 160 draft None acc None
+one2 en gen 15.0 tok/s n 160 draft None acc None
+[2026-11-06 13:27:49] == 回 2：2本に分ける
+  two2 2本目の接続数: 1
+two2 ja gen 15.5 tok/s n 160 draft None acc None
+two2 en gen 15.46 tok/s n 160 draft None acc None
+[comm_init] device 0 second line up (10.77.3.1:51053)
+[comm_init] device 0 second line up (10.77.3.1:51053)
+[2026-11-06 13:28:37] == 先読み（深さ2）：1本
+  one_mtp 2本目の接続数: 0
+one_mtp ja gen 23.43 tok/s n 160 draft 136 acc 90
+one_mtp en gen 23.64 tok/s n 160 draft 136 acc 90
+[2026-11-06 13:29:19] == 先読み（深さ2）：2本に分ける
+  two_mtp 2本目の接続数: 1
+two_mtp ja gen 25.45 tok/s n 160 draft 136 acc 90
+two_mtp en gen 25.68 tok/s n 160 draft 136 acc 90
+[comm_init] device 0 second line up (10.77.3.1:51053)
+[comm_init] device 0 second line up (10.77.3.1:51053)
+[2026-11-06 13:30:02] == 答えの一致（1本と2本）
+one1 two1 ja ��v
+one1 two1 en ��v
+one_mtp two_mtp ja ��v
+one_mtp two_mtp en ��v
+[2026-11-06 13:30:02] 終わり → 20261106-1324-two-line-split
+active
+active

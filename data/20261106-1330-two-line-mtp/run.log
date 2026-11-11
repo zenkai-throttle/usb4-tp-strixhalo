@@ -1,0 +1,43 @@
+[2026-11-06 13:30:40] == 準備（router を止める・リンク）
+unit1 1-2 rx=10.0 Gb/sx2
+unit1 2-2 rx=10.0 Gb/sx2
+unit2 0-2 rx=10.0 Gb/sx2
+unit2 1-2 rx=10.0 Gb/sx2
+rtt min/avg/max/mdev = 0.741/1.039/1.190/0.140 ms
+[2026-11-06 13:30:56] 線＝thunderbolt0  tb_itr val=0 / 0  EXTRA=GGML_RPC_LAZY_SYNC=1 GGML_VK_HOST_BARRIER=1 GGML_VK_UMA_DIRECT_READ_MAX=65536
+rtt min/avg/max/mdev = 0.735/0.793/0.894/0.071 ms
+[2026-11-06 13:31:07] == 深さ 2：1本（f32）
+  d2_one 2本目の接続数: 0
+d2_one ja gen 23.5 tok/s n 160 draft 136 acc 90
+d2_one en gen 23.49 tok/s n 160 draft 136 acc 90
+[2026-11-06 13:31:51] == 深さ 2：2本（f32）
+  d2_two 2本目の接続数: 1
+d2_two ja gen 25.59 tok/s n 160 draft 136 acc 90
+d2_two en gen 25.61 tok/s n 160 draft 136 acc 90
+[2026-11-06 13:32:35] == 深さ 3：1本（f32）
+  d3_one 2本目の接続数: 0
+d3_one ja gen 23.33 tok/s n 160 draft 180 acc 99
+d3_one en gen 25.57 tok/s n 160 draft 160 acc 105
+[2026-11-06 13:33:19] == 深さ 3：2本（f32）
+  d3_two 2本目の接続数: 1
+d3_two ja gen 24.8 tok/s n 160 draft 180 acc 99
+d3_two en gen 27.08 tok/s n 160 draft 160 acc 105
+[2026-11-06 13:34:02] == 深さ 4：1本（f32）
+  d4_one 2本目の接続数: 0
+d4_one ja gen 21.72 tok/s n 160 draft 219 acc 104
+d4_one en gen 23.94 tok/s n 160 draft 199 acc 109
+[2026-11-06 13:34:47] == 深さ 4：2本（f32）
+  d4_two 2本目の接続数: 1
+d4_two ja gen 23.12 tok/s n 160 draft 219 acc 104
+d4_two en gen 25.25 tok/s n 160 draft 199 acc 109
+[2026-11-06 13:35:32] == 深さ 3：1本（BF16 を 4096 要素から）
+  d3_one_bf 2本目の接続数: 0
+d3_one_bf ja gen 23.04 tok/s n 160 draft 179 acc 99
+d3_one_bf en gen 27.01 tok/s n 160 draft 156 acc 107
+[2026-11-06 13:36:15] == 深さ 3：2本（BF16）
+  d3_two_bf 2本目の接続数: 1
+d3_two_bf ja gen 23.14 tok/s n 160 draft 179 acc 99
+d3_two_bf en gen 27.04 tok/s n 160 draft 156 acc 107
+[2026-11-06 13:36:59] 終わり → 20261106-1330-two-line-mtp
+active
+active
