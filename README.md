@@ -126,6 +126,10 @@ Before publishing we searched again (English pages, 2026-11-20 and 2026-11-21). 
 - [Strix-halo-dual-optimized](https://github.com/ayysasha/Strix-halo-dual-optimized) cuts TCP latency over `thunderbolt_net` from ~65 µs to ~8 µs with busy polling and power settings (vLLM, TP=2).
 - [strix-halo-usb4-driver](https://github.com/hyukudan/strix-halo-usb4-driver) and [strix-halo-engine-lab](https://github.com/hyukudan/strix-halo-engine-lab) use their own USB4 stream driver (throttling set to 8192 ns, optional polling) and their own engine for TP2 across two Strix Halo boxes.
 
+## The story behind it
+
+The original write-up is in Japanese (note, episode 9 of a series). note offers an automatic English translation, which we have not checked, so please read it with care: https://note.com/zenkai_throttle/n/n13515d4bc8dd
+
 ## Questions we would like answered
 
 - Does the same interrupt-throttling change help other hardware that uses the Linux `thunderbolt` driver for host-to-host networking?
